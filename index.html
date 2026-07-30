@@ -340,6 +340,7 @@
   ];
 
   var STORAGE_KEY = "wineInventoryData_v1";
+  var FIREBASE_URL = "https://wine-cellar-23e4d-default-rtdb.firebaseio.com/wines";
   var wines = [];
   var currentView = "inventory";
   var currentTypeFilter = "הכל";
@@ -387,6 +388,65 @@
   }
   function saveWines(){
     localStorage.setItem(STORAGE_KEY, JSON.stringify(wines));
+  }
+
+  // ---- cloud sync (Firebase Realtime Database) ----
+  function cloudPutWine(wine){
+    fetch(FIREBASE_URL + "/" + encodeURIComponent(wine.id) + ".json", {
+      method: "PUT",
+      body: JSON.stringify(wine)
+    }).catch(function(){ /* offline - local copy stays authoritative until reconnect */ });
+  }
+  function cloudDeleteWine(id){
+    fetch(FIREBASE_URL + "/" + encodeURIComponent(id) + ".json", {
+      method: "DELETE"
+    }).catch(function(){});
+  }
+  function cloudReplaceAll(list){
+    var obj = {};
+    list.forEach(function(w){ obj[w.id] = w; });
+    fetch(FIREBASE_URL + ".json", {
+      method: "PUT",
+      body: JSON.stringify(obj)
+    }).catch(function(){});
+  }
+  function applyRemoteSnapshot(path, data){
+    if (path === "/"){
+      wines = data ? Object.keys(data).map(function(k){ return data[k]; }) : [];
+    } else {
+      var id = path.replace(/^\//, "").split("/")[0];
+      if (data === null){
+        wines = wines.filter(function(w){ return w.id !== id; });
+      } else {
+        var idx = wines.findIndex(function(w){ return w.id === id; });
+        if (idx > -1) wines[idx] = data; else wines.push(data);
+      }
+    }
+    saveWines();
+    renderAll();
+  }
+  function startCloudSync(){
+    fetch(FIREBASE_URL + ".json")
+      .then(function(res){ return res.json(); })
+      .then(function(data){
+        wines = data ? Object.keys(data).map(function(k){ return data[k]; }) : [];
+        saveWines();
+        renderAll();
+      })
+      .catch(function(){ /* offline - keep locally cached data */ })
+      .then(function(){
+        try{
+          var es = new EventSource(FIREBASE_URL + ".json");
+          es.addEventListener("put", function(e){
+            var msg = JSON.parse(e.data);
+            applyRemoteSnapshot(msg.path, msg.data);
+          });
+          es.addEventListener("patch", function(e){
+            var msg = JSON.parse(e.data);
+            applyRemoteSnapshot(msg.path, msg.data);
+          });
+        }catch(e){ /* EventSource not available - local + manual refresh only */ }
+      });
   }
 
   function toast(msg){
@@ -629,14 +689,20 @@
     var data = {};
     formFieldIds.forEach(function(k){ data[k] = document.getElementById("f-"+k).value.trim(); });
     if (!data.name){ toast("נא להזין שם יין"); return; }
+    var savedWine = null;
     if (editingId){
       var idx = wines.findIndex(function(w){return w.id === editingId;});
-      if (idx > -1) wines[idx] = Object.assign({}, wines[idx], data);
+      if (idx > -1){
+        wines[idx] = Object.assign({}, wines[idx], data);
+        savedWine = wines[idx];
+      }
     } else {
       data.id = uid();
       wines.push(data);
+      savedWine = data;
     }
     saveWines();
+    if (savedWine) cloudPutWine(savedWine);
     closeForm();
     renderAll();
     toast("נשמר בהצלחה");
@@ -650,6 +716,7 @@
     if (!confirm("למחוק את הבקבוק?")) return;
     wines = wines.filter(function(w){return w.id !== id;});
     saveWines();
+    cloudDeleteWine(id);
     renderAll();
   }
   function changeQty(id, delta){
@@ -659,6 +726,7 @@
     if (q < 0) q = 0;
     w.quantity = q;
     saveWines();
+    cloudPutWine(w);
     renderAll();
   }
 
@@ -769,6 +837,7 @@
       wines = wines.concat(imported);
     }
     saveWines();
+    cloudReplaceAll(wines);
     closeImportModal();
     renderAll();
     toast("נסרקו "+scanned+" שורות · יובאו "+imported.length+(skipped ? " · דולגו "+skipped+" ריקות" : ""));
@@ -783,16 +852,30 @@
       return r;
     });
     var ws = XLSX.utils.json_to_sheet(rows);
+
+    var now = new Date();
+    var dd = String(now.getDate()).padStart(2,"0");
+    var mm = String(now.getMonth()+1).padStart(2,"0");
+    var yyyy = now.getFullYear();
+    var printDate = dd + "." + mm + "." + yyyy;
+
+    // printed page footer, date in the right-hand section
+    ws["!headerFooter"] = {
+      oddFooter: "&R" + printDate,
+      evenFooter: "&R" + printDate,
+      firstFooter: "&R" + printDate
+    };
+
     var wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "מלאי יין");
-    var today = new Date().toISOString().slice(0,10);
-    XLSX.writeFile(wb, "מלאי יין - " + today + ".xlsx");
+    XLSX.writeFile(wb, "Wine Cellar - " + printDate + ".xlsx");
   }
 
   function resetAll(){
     if (!confirm("פעולה זו תמחק את כל המלאי השמור באפליקציה. להמשיך?")) return;
     wines = [];
     saveWines();
+    cloudReplaceAll(wines);
     renderAll();
     document.getElementById("modal-menu").classList.add("hidden");
     toast("המלאי אופס");
@@ -802,6 +885,7 @@
   document.addEventListener("DOMContentLoaded", function(){
     wines = loadWines();
     renderAll();
+    startCloudSync();
 
     document.getElementById("search").addEventListener("input", function(){
       renderSummary();
