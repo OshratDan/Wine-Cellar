@@ -319,7 +319,7 @@
 <input type="file" id="file-input" accept=".xlsx,.xls" class="hidden">
 <div class="toast" id="toast"></div>
 
-<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/xlsx-js-style/dist/xlsx.bundle.js"></script>
 <script>
 (function(){
   "use strict";
@@ -846,12 +846,55 @@
   // ---- export ----
   function exportToExcel(){
     if (!wines.length){ toast("אין נתונים לייצוא"); return; }
-    var rows = wines.map(function(w){
+
+    var sorted = wines.slice().sort(function(a,b){
+      var byType = String(a.type||"").localeCompare(String(b.type||""), "he");
+      if (byType) return byType;
+      var byCountry = String(a.country||"").localeCompare(String(b.country||""), "he");
+      if (byCountry) return byCountry;
+      var byWinery = String(a.winery||"").localeCompare(String(b.winery||""), "he");
+      if (byWinery) return byWinery;
+      return num(a.vintage) - num(b.vintage);
+    });
+
+    var rows = sorted.map(function(w){
       var r = {};
-      FIELDS.forEach(function(f){ r[f.label] = w[f.key] || ""; });
+      FIELDS.forEach(function(f){
+        r[f.label] = (f.key === "quantity") ? num(w.quantity) : (w[f.key] || "");
+      });
       return r;
     });
+
     var ws = XLSX.utils.json_to_sheet(rows);
+
+    // summary row: total quantity, at the bottom of the quantity column
+    var totalQty = sorted.reduce(function(sum,w){ return sum + num(w.quantity); }, 0);
+    var summaryExcelRow = rows.length + 2; // header (1) + data rows + 1
+    var summaryRow = FIELDS.map(function(f){
+      if (f.key === "name") return "סה\"כ";
+      if (f.key === "quantity") return totalQty;
+      return "";
+    });
+    XLSX.utils.sheet_add_aoa(ws, [summaryRow], {origin: "A" + summaryExcelRow});
+
+    // sheet displayed right-to-left
+    ws["!views"] = [{ RTL: true }];
+
+    // center-align every cell (header, data, summary), bold header + summary
+    var range = XLSX.utils.decode_range(ws["!ref"]);
+    for (var R = range.s.r; R <= range.e.r; R++){
+      for (var C = range.s.c; C <= range.e.c; C++){
+        var addr = XLSX.utils.encode_cell({r:R, c:C});
+        var cell = ws[addr];
+        if (!cell) continue;
+        var isHeaderOrSummary = (R === range.s.r) || (R === range.e.r);
+        cell.s = {
+          alignment: { horizontal: "center", vertical: "center" },
+          font: isHeaderOrSummary ? { bold: true } : undefined
+        };
+      }
+    }
+    ws["!cols"] = FIELDS.map(function(){ return {wch: 14}; });
 
     var now = new Date();
     var dd = String(now.getDate()).padStart(2,"0");
