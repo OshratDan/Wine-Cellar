@@ -844,8 +844,14 @@
   }
 
   // ---- export ----
+  var EXPORT_COLUMN_ORDER = ["country","type","winery","name","region","grape","vintage","bottleSize","cabinet","shelf","quantity","rating"];
+
   function exportToExcel(){
     if (!wines.length){ toast("אין נתונים לייצוא"); return; }
+
+    var exportFields = EXPORT_COLUMN_ORDER.map(function(key){
+      return FIELDS.filter(function(f){ return f.key === key; })[0];
+    });
 
     var sorted = wines.slice().sort(function(a,b){
       var byType = String(a.type||"").localeCompare(String(b.type||""), "he");
@@ -859,7 +865,7 @@
 
     var rows = sorted.map(function(w){
       var r = {};
-      FIELDS.forEach(function(f){
+      exportFields.forEach(function(f){
         r[f.label] = (f.key === "quantity") ? num(w.quantity) : (w[f.key] || "");
       });
       return r;
@@ -870,15 +876,12 @@
     // summary row: total quantity, at the bottom of the quantity column
     var totalQty = sorted.reduce(function(sum,w){ return sum + num(w.quantity); }, 0);
     var summaryExcelRow = rows.length + 2; // header (1) + data rows + 1
-    var summaryRow = FIELDS.map(function(f){
+    var summaryRow = exportFields.map(function(f){
       if (f.key === "name") return "סה\"כ";
       if (f.key === "quantity") return totalQty;
       return "";
     });
     XLSX.utils.sheet_add_aoa(ws, [summaryRow], {origin: "A" + summaryExcelRow});
-
-    // sheet displayed right-to-left
-    ws["!views"] = [{ RTL: true }];
 
     // center-align every cell (header, data, summary), bold header + summary
     var range = XLSX.utils.decode_range(ws["!ref"]);
@@ -894,7 +897,7 @@
         };
       }
     }
-    ws["!cols"] = FIELDS.map(function(){ return {wch: 14}; });
+    ws["!cols"] = exportFields.map(function(){ return {wch: 14}; });
 
     var now = new Date();
     var dd = String(now.getDate()).padStart(2,"0");
@@ -910,6 +913,7 @@
     };
 
     var wb = XLSX.utils.book_new();
+    wb.Workbook = { Views: [{ RTL: true }] }; // sheet displayed right-to-left
     XLSX.utils.book_append_sheet(wb, ws, "מלאי יין");
     XLSX.writeFile(wb, "Wine Cellar - " + printDate + ".xlsx");
   }
