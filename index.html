@@ -688,7 +688,7 @@
   function saveForm(){
     var data = {};
     formFieldIds.forEach(function(k){ data[k] = document.getElementById("f-"+k).value.trim(); });
-    if (!data.name){ toast("נא להזין שם יין"); return; }
+    if (!data.name){ data.name = "ללא שם"; }
     var savedWine = null;
     if (editingId){
       var idx = wines.findIndex(function(w){return w.id === editingId;});
