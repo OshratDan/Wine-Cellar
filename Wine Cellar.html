@@ -320,9 +320,41 @@
 <div class="toast" id="toast"></div>
 
 <script src="https://cdn.jsdelivr.net/npm/xlsx-js-style/dist/xlsx.bundle.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.13.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.13.2/firebase-auth-compat.js"></script>
 <script>
 (function(){
   "use strict";
+
+  var firebaseConfig = {
+    apiKey: "AIzaSyDkNevHeLWSt9gVpN2f-lIbWwDcLdQuh_k",
+    authDomain: "wine-cellar-23e4d.firebaseapp.com",
+    databaseURL: "https://wine-cellar-23e4d-default-rtdb.firebaseio.com",
+    projectId: "wine-cellar-23e4d",
+    storageBucket: "wine-cellar-23e4d.firebasestorage.app",
+    messagingSenderId: "1002676847037",
+    appId: "1:1002676847037:web:3a58b84378b0e58a8552d4"
+  };
+  firebase.initializeApp(firebaseConfig);
+
+  // sign in anonymously so every request to the database carries a valid auth token
+  var authReady = new Promise(function(resolve){
+    firebase.auth().onAuthStateChanged(function(user){
+      if (user) resolve(user);
+    });
+    firebase.auth().signInAnonymously().catch(function(err){
+      console.error("Firebase auth failed:", err);
+    });
+  });
+
+  // returns a promise resolving to url + a fresh (auto-refreshed) auth token
+  function authedUrl(url){
+    return authReady.then(function(){
+      return firebase.auth().currentUser.getIdToken().then(function(token){
+        return url + (url.indexOf("?") > -1 ? "&" : "?") + "auth=" + token;
+      });
+    });
+  }
 
   var FIELDS = [
     {key:"name", label:"שם היין", aliases:["שם היין","שם"]},
@@ -392,23 +424,27 @@
 
   // ---- cloud sync (Firebase Realtime Database) ----
   function cloudPutWine(wine){
-    fetch(FIREBASE_URL + "/" + encodeURIComponent(wine.id) + ".json", {
-      method: "PUT",
-      body: JSON.stringify(wine)
-    }).catch(function(){ /* offline - local copy stays authoritative until reconnect */ });
+    authedUrl(FIREBASE_URL + "/" + encodeURIComponent(wine.id) + ".json").then(function(url){
+      fetch(url, {
+        method: "PUT",
+        body: JSON.stringify(wine)
+      }).catch(function(){ /* offline - local copy stays authoritative until reconnect */ });
+    });
   }
   function cloudDeleteWine(id){
-    fetch(FIREBASE_URL + "/" + encodeURIComponent(id) + ".json", {
-      method: "DELETE"
-    }).catch(function(){});
+    authedUrl(FIREBASE_URL + "/" + encodeURIComponent(id) + ".json").then(function(url){
+      fetch(url, { method: "DELETE" }).catch(function(){});
+    });
   }
   function cloudReplaceAll(list){
     var obj = {};
     list.forEach(function(w){ obj[w.id] = w; });
-    fetch(FIREBASE_URL + ".json", {
-      method: "PUT",
-      body: JSON.stringify(obj)
-    }).catch(function(){});
+    authedUrl(FIREBASE_URL + ".json").then(function(url){
+      fetch(url, {
+        method: "PUT",
+        body: JSON.stringify(obj)
+      }).catch(function(){});
+    });
   }
   function applyRemoteSnapshot(path, data){
     if (path === "/"){
@@ -425,8 +461,26 @@
     saveWines();
     renderAll();
   }
+  var liveES = null;
+  function openLiveConnection(){
+    authedUrl(FIREBASE_URL + ".json").then(function(url){
+      try{
+        if (liveES) liveES.close();
+        liveES = new EventSource(url);
+        liveES.addEventListener("put", function(e){
+          var msg = JSON.parse(e.data);
+          applyRemoteSnapshot(msg.path, msg.data);
+        });
+        liveES.addEventListener("patch", function(e){
+          var msg = JSON.parse(e.data);
+          applyRemoteSnapshot(msg.path, msg.data);
+        });
+      }catch(e){ /* EventSource not available - local + manual refresh only */ }
+    });
+  }
   function startCloudSync(){
-    fetch(FIREBASE_URL + ".json")
+    authedUrl(FIREBASE_URL + ".json")
+      .then(function(url){ return fetch(url); })
       .then(function(res){ return res.json(); })
       .then(function(data){
         wines = data ? Object.keys(data).map(function(k){ return data[k]; }) : [];
@@ -435,17 +489,10 @@
       })
       .catch(function(){ /* offline - keep locally cached data */ })
       .then(function(){
-        try{
-          var es = new EventSource(FIREBASE_URL + ".json");
-          es.addEventListener("put", function(e){
-            var msg = JSON.parse(e.data);
-            applyRemoteSnapshot(msg.path, msg.data);
-          });
-          es.addEventListener("patch", function(e){
-            var msg = JSON.parse(e.data);
-            applyRemoteSnapshot(msg.path, msg.data);
-          });
-        }catch(e){ /* EventSource not available - local + manual refresh only */ }
+        openLiveConnection();
+        // the anonymous auth token expires after ~1h; reopen the live connection
+        // periodically with a fresh token so real-time sync never silently stops
+        setInterval(openLiveConnection, 50 * 60 * 1000);
       });
   }
 
