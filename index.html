@@ -462,10 +462,11 @@
     renderAll();
   }
   var liveES = null;
+  var reconnectTimer = null;
   function openLiveConnection(){
     authedUrl(FIREBASE_URL + ".json").then(function(url){
       try{
-        if (liveES) liveES.close();
+        if (liveES) { liveES.close(); liveES = null; }
         liveES = new EventSource(url);
         liveES.addEventListener("put", function(e){
           var msg = JSON.parse(e.data);
@@ -475,10 +476,17 @@
           var msg = JSON.parse(e.data);
           applyRemoteSnapshot(msg.path, msg.data);
         });
+        // connection dropped (expired token, network hiccup, backgrounded tab...) - reconnect with a fresh token.
+        // native EventSource does NOT auto-retry on an unauthorized/failed initial response, so we must.
+        liveES.addEventListener("error", function(){
+          if (liveES){ liveES.close(); liveES = null; }
+          if (reconnectTimer) clearTimeout(reconnectTimer);
+          reconnectTimer = setTimeout(resync, 4000);
+        });
       }catch(e){ /* EventSource not available - local + manual refresh only */ }
     });
   }
-  function startCloudSync(){
+  function resync(){
     authedUrl(FIREBASE_URL + ".json")
       .then(function(url){ return fetch(url); })
       .then(function(res){ return res.json(); })
@@ -488,12 +496,19 @@
         renderAll();
       })
       .catch(function(){ /* offline - keep locally cached data */ })
-      .then(function(){
-        openLiveConnection();
-        // the anonymous auth token expires after ~1h; reopen the live connection
-        // periodically with a fresh token so real-time sync never silently stops
-        setInterval(openLiveConnection, 50 * 60 * 1000);
-      });
+      .then(function(){ openLiveConnection(); });
+  }
+  function startCloudSync(){
+    resync();
+    // the anonymous auth token expires after ~1h; periodically refresh proactively too
+    setInterval(resync, 50 * 60 * 1000);
+    // mobile browsers freeze/kill background connections - catch up whenever the app
+    // comes back to the foreground or the device reconnects to the network
+    document.addEventListener("visibilitychange", function(){
+      if (document.visibilityState === "visible") resync();
+    });
+    window.addEventListener("pageshow", function(){ resync(); });
+    window.addEventListener("online", function(){ resync(); });
   }
 
   function toast(msg){
