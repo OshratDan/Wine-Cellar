@@ -322,6 +322,7 @@
 <script src="https://cdn.jsdelivr.net/npm/xlsx-js-style/dist/xlsx.bundle.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.13.2/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.13.2/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.13.2/firebase-database-compat.js"></script>
 <script>
 (function(){
   "use strict";
@@ -336,8 +337,11 @@
     appId: "1:1002676847037:web:3a58b84378b0e58a8552d4"
   };
   firebase.initializeApp(firebaseConfig);
+  var winesRef = firebase.database().ref("wines");
 
-  // sign in anonymously so every request to the database carries a valid auth token
+  // sign in anonymously so the database SDK carries a valid auth context.
+  // the SDK (unlike raw fetch/EventSource) manages its own persistent connection,
+  // auth-token refresh, and reconnection after network loss / backgrounding.
   var authReady = new Promise(function(resolve){
     firebase.auth().onAuthStateChanged(function(user){
       if (user) resolve(user);
@@ -346,15 +350,6 @@
       console.error("Firebase auth failed:", err);
     });
   });
-
-  // returns a promise resolving to url + a fresh (auto-refreshed) auth token
-  function authedUrl(url){
-    return authReady.then(function(){
-      return firebase.auth().currentUser.getIdToken().then(function(token){
-        return url + (url.indexOf("?") > -1 ? "&" : "?") + "auth=" + token;
-      });
-    });
-  }
 
   var FIELDS = [
     {key:"name", label:"שם היין", aliases:["שם היין","שם"]},
@@ -372,7 +367,6 @@
   ];
 
   var STORAGE_KEY = "wineInventoryData_v1";
-  var FIREBASE_URL = "https://wine-cellar-23e4d-default-rtdb.firebaseio.com/wines";
   var wines = [];
   var currentView = "inventory";
   var currentTypeFilter = "הכל";
@@ -422,93 +416,38 @@
     localStorage.setItem(STORAGE_KEY, JSON.stringify(wines));
   }
 
-  // ---- cloud sync (Firebase Realtime Database) ----
+  // ---- cloud sync (Firebase Realtime Database SDK) ----
+  // Using the official SDK instead of raw REST/EventSource: it keeps a persistent
+  // WebSocket connection, refreshes the auth token by itself, and automatically
+  // reconnects after the device sleeps, loses network, or the tab is backgrounded.
   function cloudPutWine(wine){
-    authedUrl(FIREBASE_URL + "/" + encodeURIComponent(wine.id) + ".json").then(function(url){
-      fetch(url, {
-        method: "PUT",
-        body: JSON.stringify(wine)
-      }).catch(function(){ /* offline - local copy stays authoritative until reconnect */ });
+    authReady.then(function(){
+      winesRef.child(wine.id).set(wine).catch(function(){ /* offline - SDK will retry/queue automatically */ });
     });
   }
   function cloudDeleteWine(id){
-    authedUrl(FIREBASE_URL + "/" + encodeURIComponent(id) + ".json").then(function(url){
-      fetch(url, { method: "DELETE" }).catch(function(){});
+    authReady.then(function(){
+      winesRef.child(id).remove().catch(function(){});
     });
   }
   function cloudReplaceAll(list){
     var obj = {};
     list.forEach(function(w){ obj[w.id] = w; });
-    authedUrl(FIREBASE_URL + ".json").then(function(url){
-      fetch(url, {
-        method: "PUT",
-        body: JSON.stringify(obj)
-      }).catch(function(){});
+    authReady.then(function(){
+      winesRef.set(obj).catch(function(){});
     });
   }
-  function applyRemoteSnapshot(path, data){
-    if (path === "/"){
-      wines = data ? Object.keys(data).map(function(k){ return data[k]; }) : [];
-    } else {
-      var id = path.replace(/^\//, "").split("/")[0];
-      if (data === null){
-        wines = wines.filter(function(w){ return w.id !== id; });
-      } else {
-        var idx = wines.findIndex(function(w){ return w.id === id; });
-        if (idx > -1) wines[idx] = data; else wines.push(data);
-      }
-    }
-    saveWines();
-    renderAll();
-  }
-  var liveES = null;
-  var reconnectTimer = null;
-  function openLiveConnection(){
-    authedUrl(FIREBASE_URL + ".json").then(function(url){
-      try{
-        if (liveES) { liveES.close(); liveES = null; }
-        liveES = new EventSource(url);
-        liveES.addEventListener("put", function(e){
-          var msg = JSON.parse(e.data);
-          applyRemoteSnapshot(msg.path, msg.data);
-        });
-        liveES.addEventListener("patch", function(e){
-          var msg = JSON.parse(e.data);
-          applyRemoteSnapshot(msg.path, msg.data);
-        });
-        // connection dropped (expired token, network hiccup, backgrounded tab...) - reconnect with a fresh token.
-        // native EventSource does NOT auto-retry on an unauthorized/failed initial response, so we must.
-        liveES.addEventListener("error", function(){
-          if (liveES){ liveES.close(); liveES = null; }
-          if (reconnectTimer) clearTimeout(reconnectTimer);
-          reconnectTimer = setTimeout(resync, 4000);
-        });
-      }catch(e){ /* EventSource not available - local + manual refresh only */ }
-    });
-  }
-  function resync(){
-    authedUrl(FIREBASE_URL + ".json")
-      .then(function(url){ return fetch(url); })
-      .then(function(res){ return res.json(); })
-      .then(function(data){
+  function startCloudSync(){
+    authReady.then(function(){
+      winesRef.on("value", function(snapshot){
+        var data = snapshot.val();
         wines = data ? Object.keys(data).map(function(k){ return data[k]; }) : [];
         saveWines();
         renderAll();
-      })
-      .catch(function(){ /* offline - keep locally cached data */ })
-      .then(function(){ openLiveConnection(); });
-  }
-  function startCloudSync(){
-    resync();
-    // the anonymous auth token expires after ~1h; periodically refresh proactively too
-    setInterval(resync, 50 * 60 * 1000);
-    // mobile browsers freeze/kill background connections - catch up whenever the app
-    // comes back to the foreground or the device reconnects to the network
-    document.addEventListener("visibilitychange", function(){
-      if (document.visibilityState === "visible") resync();
+      }, function(err){
+        console.error("Firebase sync error:", err);
+      });
     });
-    window.addEventListener("pageshow", function(){ resync(); });
-    window.addEventListener("online", function(){ resync(); });
   }
 
   function toast(msg){
