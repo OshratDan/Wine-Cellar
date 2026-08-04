@@ -422,19 +422,28 @@
   // reconnects after the device sleeps, loses network, or the tab is backgrounded.
   function cloudPutWine(wine){
     authReady.then(function(){
-      winesRef.child(wine.id).set(wine).catch(function(){ /* offline - SDK will retry/queue automatically */ });
+      winesRef.child(wine.id).set(wine).catch(function(err){
+        console.error("Firebase write failed:", err);
+        toast("סנכרון נכשל: " + (err && err.message ? err.message : err));
+      });
     });
   }
   function cloudDeleteWine(id){
     authReady.then(function(){
-      winesRef.child(id).remove().catch(function(){});
+      winesRef.child(id).remove().catch(function(err){
+        console.error("Firebase delete failed:", err);
+        toast("מחיקה בענן נכשלה: " + (err && err.message ? err.message : err));
+      });
     });
   }
   function cloudReplaceAll(list){
     var obj = {};
     list.forEach(function(w){ obj[w.id] = w; });
     authReady.then(function(){
-      winesRef.set(obj).catch(function(){});
+      winesRef.set(obj).catch(function(err){
+        console.error("Firebase replace-all failed:", err);
+        toast("סנכרון נכשל: " + (err && err.message ? err.message : err));
+      });
     });
   }
   function startCloudSync(){
