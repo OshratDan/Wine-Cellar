@@ -893,7 +893,9 @@
     });
     XLSX.utils.sheet_add_aoa(ws, [summaryRow], {origin: "A" + summaryExcelRow});
 
-    // center-align every cell (header, data, summary), bold header + summary
+    // center-align every cell (header, data, summary), bold header + summary,
+    // Tahoma 11 font, and thin borders on all sides of every cell
+    var thinBorder = { style: "thin", color: { rgb: "000000" } };
     var range = XLSX.utils.decode_range(ws["!ref"]);
     for (var R = range.s.r; R <= range.e.r; R++){
       for (var C = range.s.c; C <= range.e.c; C++){
@@ -903,7 +905,8 @@
         var isHeaderOrSummary = (R === range.s.r) || (R === range.e.r);
         cell.s = {
           alignment: { horizontal: "center", vertical: "center" },
-          font: isHeaderOrSummary ? { bold: true } : undefined
+          font: { name: "Tahoma", sz: 11, bold: isHeaderOrSummary },
+          border: { top: thinBorder, bottom: thinBorder, left: thinBorder, right: thinBorder }
         };
       }
     }
