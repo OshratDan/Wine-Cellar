@@ -923,7 +923,10 @@
     };
 
     var wb = XLSX.utils.book_new();
-    wb.Workbook = { Views: [{ RTL: true }] }; // sheet displayed right-to-left
+    wb.Workbook = {
+      Views: [{ RTL: true }], // sheet displayed right-to-left
+      Names: [{ Sheet: 0, Name: "_xlnm.Print_Titles", Ref: "'מלאי יין'!$1:$1" }] // repeat header row on every printed page
+    };
     XLSX.utils.book_append_sheet(wb, ws, "מלאי יין");
     XLSX.writeFile(wb, "Wine Cellar - " + printDate + ".xlsx");
   }
